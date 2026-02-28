@@ -168,6 +168,7 @@ fun GalleryScreen(
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
     var lastViewedIndex by remember { mutableStateOf(0) }
     var wasViewerOpen by remember { mutableStateOf(false) }
+    var shuffleEnabled by remember { mutableStateOf(false) }
     val gridState = rememberLazyGridState()
     var pendingFavoriteAction by remember { mutableStateOf<PendingFavoriteAction?>(null) }
 
@@ -310,7 +311,9 @@ fun GalleryScreen(
                     SwipeViewer(
                         photos = uiState.photos,
                         startIndex = viewerIndex ?: 0,
-                        onPageChanged = {
+                        shuffleEnabled = shuffleEnabled,
+                        onShuffleToggle = { shuffleEnabled = !shuffleEnabled },
+                        onCurrentPhotoChanged = {
                             viewerIndex = it
                             lastViewedIndex = it
                         },
@@ -410,19 +413,53 @@ private fun PhotoGridItem(
 private fun SwipeViewer(
     photos: List<PhotoItem>,
     startIndex: Int,
-    onPageChanged: (Int) -> Unit,
+    shuffleEnabled: Boolean,
+    onShuffleToggle: () -> Unit,
+    onCurrentPhotoChanged: (Int) -> Unit,
     onSwipeUp: (Long) -> Unit,
     onSwipeDown: (Long) -> Unit
 ) {
     val safeStartIndex = startIndex.coerceIn(0, (photos.size - 1).coerceAtLeast(0))
+    val photoIds = remember(photos) { photos.map { it.id } }
+    var currentPhotoId by remember(photoIds) {
+        mutableStateOf(photos.getOrNull(safeStartIndex)?.id)
+    }
+    var playOrder by remember(photoIds) {
+        mutableStateOf((0 until photos.size).toList())
+    }
+
     val pagerState = rememberPagerState(
         initialPage = safeStartIndex,
-        pageCount = { photos.size }
+        pageCount = { playOrder.size }
     )
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(pagerState.currentPage) {
-        onPageChanged(pagerState.currentPage)
+    LaunchedEffect(shuffleEnabled, photoIds) {
+        if (photos.isEmpty()) return@LaunchedEffect
+
+        val anchorId = currentPhotoId ?: photos[safeStartIndex].id
+        val anchorIndex = photos.indexOfFirst { it.id == anchorId }
+            .takeIf { it >= 0 }
+            ?: safeStartIndex
+
+        val newOrder = buildPlayOrder(
+            totalCount = photos.size,
+            anchorIndex = anchorIndex,
+            shuffleEnabled = shuffleEnabled
+        )
+
+        playOrder = newOrder
+        val targetPage = newOrder.indexOf(anchorIndex)
+            .takeIf { it >= 0 }
+            ?: 0
+        pagerState.scrollToPage(targetPage)
+    }
+
+    LaunchedEffect(pagerState.currentPage, playOrder, photoIds) {
+        if (photos.isEmpty()) return@LaunchedEffect
+        val currentIndex = playOrder.getOrElse(pagerState.currentPage) { safeStartIndex }
+        currentPhotoId = photos.getOrNull(currentIndex)?.id
+        onCurrentPhotoChanged(currentIndex)
     }
 
     Scaffold(
@@ -439,6 +476,17 @@ private fun SwipeViewer(
                     modifier = Modifier.align(Alignment.Center),
                     fontWeight = FontWeight.SemiBold
                 )
+
+                Text(
+                    text = if (shuffleEnabled) "随机" else "顺序",
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .clickable(onClick = onShuffleToggle)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     ) { innerPadding ->
@@ -451,7 +499,7 @@ private fun SwipeViewer(
                 .fillMaxSize()
                 .padding(bottom = bottomPadding)
         ) { page ->
-            val photo = photos[page]
+            val photo = photos[playOrder[page]]
             var totalDragX by remember(photo.id) { mutableStateOf(0f) }
             var totalDragY by remember(photo.id) { mutableStateOf(0f) }
             var swipeFeedback by remember(photo.id) { mutableStateOf<SwipeFeedback?>(null) }
@@ -480,7 +528,7 @@ private fun SwipeViewer(
                                 when {
                                     absX > absY && totalDragX < -threshold -> {
                                         scope.launch {
-                                            val next = (pagerState.currentPage + 1).coerceAtMost(photos.lastIndex)
+                                            val next = (pagerState.currentPage + 1).coerceAtMost(playOrder.lastIndex)
                                             pagerState.animateScrollToPage(next)
                                         }
                                     }
@@ -501,7 +549,7 @@ private fun SwipeViewer(
                                             } else {
                                                 SwipeFeedback.DELETE_ON
                                             }
-                                            val next = (pagerState.currentPage + 1).coerceAtMost(photos.lastIndex)
+                                            val next = (pagerState.currentPage + 1).coerceAtMost(playOrder.lastIndex)
                                             pagerState.animateScrollToPage(next)
                                         }
                                     }
@@ -515,7 +563,7 @@ private fun SwipeViewer(
                                             } else {
                                                 SwipeFeedback.FAVORITE_ON
                                             }
-                                            val next = (pagerState.currentPage + 1).coerceAtMost(photos.lastIndex)
+                                            val next = (pagerState.currentPage + 1).coerceAtMost(playOrder.lastIndex)
                                             pagerState.animateScrollToPage(next)
                                         }
                                     }
@@ -574,4 +622,20 @@ private fun SwipeViewer(
             }
         }
     }
+}
+
+private fun buildPlayOrder(
+    totalCount: Int,
+    anchorIndex: Int,
+    shuffleEnabled: Boolean
+): List<Int> {
+    val normalizedAnchor = anchorIndex.coerceIn(0, (totalCount - 1).coerceAtLeast(0))
+    if (!shuffleEnabled || totalCount <= 1) {
+        return (0 until totalCount).toList()
+    }
+
+    val remaining = (0 until totalCount)
+        .filter { it != normalizedAnchor }
+        .shuffled()
+    return listOf(normalizedAnchor) + remaining
 }
