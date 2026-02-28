@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+**/build/
+captures/
+.idea/
+*.iml
+.kotlin/
+
+# Local planning docs (not for GitHub)
+DESIGN.md
+IMPLEMENTATION_PLAN.md
+PROGRESS.md
